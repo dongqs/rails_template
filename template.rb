@@ -14,8 +14,22 @@ gem "devise"
 gem "devise_ldap_authenticatable"
 
 gem_group :development, :test do
+  gem "spring-commands-rspec"
+  gem "rspec-rails"
+  gem "guard-rspec"
+
+  gem "shoulda"
+  gem "database_cleaner"
+  gem "factory_girl_rails"
+
   gem "better_errors"
   gem "binding_of_caller"
+  gem "rack-mini-profiler"
+end
+
+gem_group :test do
+  gem "simplecov", require: false
+  gem "test_after_commit"
 end
 
 
@@ -36,6 +50,20 @@ append_file ".gitignore", <<-EOF
 EOF
 
 
+# application.rb
+gsub_file "config/application.rb", "# config.time_zone = 'Central Time (US & Canada)'", "config.time_zone = 'Beijing'"
+inject_into_file "config/application.rb", after: "# config.i18n.default_locale = :de\n" do
+<<-EOS
+    config.generators do |g|
+      g.stylesheets false
+      g.javascripts false
+      g.helper false
+      g.test_framework :rspec, view_specs: false, request_specs: false
+    end
+EOS
+end
+
+
 # database config example
 run "cp config/database.yml config/database.yml.example"
 
@@ -51,7 +79,7 @@ create_file "app/views/layouts/application.html.slim", <<-EOF
 doctype html
 html
   head
-    title Template
+    title #{app_path}
     = stylesheet_link_tag 'application', media: 'all', 'data-turbolinks-track' => true
     = javascript_include_tag 'application', 'data-turbolinks-track' => true
     = csrf_meta_tags
@@ -106,21 +134,14 @@ create_file "lib/templates/slim/scaffold/_form.html.slim", <<-EOF
 EOF
 
 
-# static pages
-generate "controller", "static_pages", "home", "status"
-inject_into_file "app/controllers/static_pages_controller.rb", after: "def status\n" do
-<<-EOF
-    render json: {
-      status: "ok",
-      hostname: Socket.gethostname,
-      service: "mushroom",
-      commit: @@comment ||= `git log -1 --oneline`
-    }
-EOF
-end
+# rspect
+generate "rspec:install"
+gsub_file ".rspec", "--warnings\n", ""
 
-gsub_file "config/routes.rb", "get 'static_pages/home'", "root to: 'static_pages#home'"
-gsub_file "config/routes.rb", "get 'static_pages/status'", "get '/status' => 'static_pages#status'"
+
+# guard
+run "guard init rspec"
+inject_into_file "Guardfile", ", cmd: 'spring rspec'", after: ":rspec"
 
 
 # devise"
@@ -128,6 +149,57 @@ generate "devise:install"
 generate "devise:views"
 generate "devise", "user"
 rake "db:migrate"
+prepend_file "spec/rails_helper.rb", <<-EOF
+require 'simplecov'
+SimpleCov.start
+EOF
+
+create_file "spec/support/devise.rb", <<-EOF
+module ValidUserControllerHelper
+  def sign_in_user role = :user
+    @user ||= FactoryGirl.create role
+    sign_in :user, @user
+    @user
+  end
+end
+
+RSpec.configure do |config|
+  config.include Devise::TestHelpers, :type => :controller
+  config.include Devise::TestHelpers, :type => :view
+  config.include ValidUserControllerHelper, :type => :controller
+  config.include ValidUserControllerHelper, :type => :view
+end
+
+# This support package contains modules for authenticaiting
+# devise users for request specs.
+
+# This module authenticates users for request specs.#
+module ValidUserRequestHelper
+    # Define a method which signs in as a valid user.
+    def sign_in_user role = :user
+        # ASk factory girl to generate a valid user for us.
+        @user ||= FactoryGirl.create role
+
+        # We action the login request using the parameters before we begin.
+        # The login requests will match these to the user we just created in the factory, and authenticate us.
+        post_via_redirect user_session_path, 'user[username]' => @user.username, 'user[password]' => @user.password
+    end
+end
+
+# Configure these to modules as helpers in the appropriate tests.
+RSpec.configure do |config|
+    # Include the help for the request specs.
+    config.include ValidUserRequestHelper, :type => :request
+end
+EOF
+inject_into_file "spec/factories/users.rb", after: "factory :user do\n" do
+<<-EOF
+    sequence(:username) { |n| "test\#{n}" }
+    sequence(:email) { |n| "test\#{n}@exampl.com" }
+    password "password"
+    password_confirmation "password"
+EOF
+end
 
 
 # devise_ldap_authenticatable"
@@ -194,9 +266,9 @@ inject_into_file "config/initializers/devise.rb", after: "# ==> LDAP Configurati
   config.ldap_use_admin_to_bind = true"
 EOF
 end
-
 gsub_file "config/initializers/devise.rb", "# config.authentication_keys = [ :email ]", "config.authentication_keys = [ :username ]"
 gsub_file "config/initializers/devise.rb", "config.password_length = 8..128", "config.password_length = 4..128"
+
 inject_into_file "app/controllers/application_controller.rb", after: "protect_from_forgery with: :exception\n" do
 <<-EOF
   skip_before_action :verify_authenticity_token, if: :skip_authenticity?
@@ -206,7 +278,7 @@ inject_into_file "app/controllers/application_controller.rb", after: "protect_fr
   protected
 
   def configure_permitted_parameters
-    devise_parameter_sanitizer.for(:sign_in) << :username
+    devise_parameter_sanitizer.for(:sign_up) << :email
   end
 
   def skip_authenticity?
@@ -216,6 +288,34 @@ EOF
 end
 
 
-# CMS
-generate "scaffold", "blog", "title:string", "content:text", "published_at:datetime", "visits:integer", "public:boolean", "category:string"
-rake "db:migrate"
+# static pages
+generate "controller", "static_pages", "home", "status"
+inject_into_file "app/controllers/static_pages_controller.rb", after: "def status\n" do
+<<-EOF
+    render json: {
+      status: "ok",
+      hostname: Socket.gethostname,
+      service: "mushroom",
+      commit: @@comment ||= `git log -1 --oneline`
+    }
+EOF
+end
+gsub_file "config/routes.rb", "get 'static_pages/home'", "root to: 'static_pages#home'"
+gsub_file "config/routes.rb", "get 'static_pages/status'", "get '/status' => 'static_pages#status'"
+inject_into_file "spec/controllers/static_pages_controller_spec.rb", after: "RSpec.describe StaticPagesController, :type => :controller do\n" do
+<<-EOF
+
+  before { sign_in_user }
+EOF
+end
+
+
+# # Blogs for test
+# generate "scaffold", "blog", "title:string", "content:text", "published_at:datetime", "visits:integer", "public:boolean", "category:string"
+# rake "db:migrate"
+# inject_into_file "spec/controllers/blogs_controller_spec.rb", after: "RSpec.describe BlogsController, :type => :controller do\n" do
+# <<-EOF
+# 
+#   before { sign_in_user }
+# EOF
+# end
