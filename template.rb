@@ -18,7 +18,9 @@ gem_group :development, :test do
   gem "binding_of_caller"
 end
 
-run "bundle install --local"
+
+# run "bundle install --local" # for development
+run "bundle install"
 
 
 # .gitignore
