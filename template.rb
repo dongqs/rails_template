@@ -74,7 +74,7 @@ run "cp config/application.yml config/application.yml.example"
 
 
 # slim
-run "rm app/views/layouts/application.html.erb"
+remove_file "app/views/layouts/application.html.erb"
 create_file "app/views/layouts/application.html.slim", <<-EOF
 doctype html
 html
@@ -144,7 +144,7 @@ run "guard init rspec"
 inject_into_file "Guardfile", ", cmd: 'spring rspec'", after: ":rspec"
 
 
-# devise"
+# devise
 generate "devise:install"
 generate "devise:views"
 generate "devise", "user"
@@ -153,6 +153,20 @@ prepend_file "spec/rails_helper.rb", <<-EOF
 require 'simplecov'
 SimpleCov.start
 EOF
+inject_into_file "spec/rails_helper.rb", after: "RSpec.configure do |config|\n" do
+<<-EOF
+  config.before(:suite) do
+    DatabaseCleaner.strategy = :transaction
+    DatabaseCleaner.clean_with(:truncation)
+  end
+
+  config.around(:each) do |example|
+    DatabaseCleaner.cleaning do
+      example.run
+    end
+  end
+EOF
+end
 
 create_file "spec/support/devise.rb", <<-EOF
 module ValidUserControllerHelper

@@ -1,4 +1,4 @@
 usage
 =====
 
-rails new ooxx -m https://raw.githubusercontent.com/dongqs/rails_template/master/template.rb
+rails new ooxx -T -m https://raw.githubusercontent.com/dongqs/rails_template/master/template.rb
