@@ -25,14 +25,14 @@ run "bundle install"
 
 # .gitignore
 append_file ".gitignore", <<-EOF
-  /config/application.yml
-  /config/database.yml
-  /config/secrets.yml
-  /config/ldap.yml
-  /config/sidekiq.yml
-  *.swp
-  /coverage
-  .DS_Store
+/config/application.yml
+/config/database.yml
+/config/secrets.yml
+/config/ldap.yml
+/config/sidekiq.yml
+*.swp
+/coverage
+.DS_Store
 EOF
 
 
@@ -137,8 +137,11 @@ run "cp config/ldap.yml config/ldap.yml.bak"
 generate "migration", "add_username_to_users", "username:string:index"
 rake "db:migrate"
 
-gsub_file "app/models/user.rb", "devise :ldap_authenticatable, :registerable,", ""
-gsub_file "app/models/user.rb", ":recoverable, :rememberable, :trackable, :validatable", <<-EOF
+remove_file "app/models/user.rb"
+create_file "app/models/user.rb", <<-EOF
+class User < ActiveRecord::Base
+  # Include default devise modules. Others available are:
+  # :confirmable, :lockable, :timeoutable and :omniauthable
 
   unless Rails.env.production?
     devise :database_authenticatable, :rememberable, :trackable, :registerable# , :recoverable, :validatable
@@ -161,17 +164,56 @@ gsub_file "app/models/user.rb", ":recoverable, :rememberable, :trackable, :valid
     end
   end
 
+  validates :username, presence:true, uniqueness: true
+
   def name
     self.username
   end
+end
 EOF
+
 gsub_file "app/views/devise/sessions/new.html.erb", "email", "username"
-gsub_file "config/initializers/devise.rb", "# config.ldap_logger = true", "config.ldap_logger = true"
-gsub_file "config/initializers/devise.rb", "# config.ldap_create_user = false", "config.ldap_create_user = true"
-gsub_file "config/initializers/devise.rb", "# config.ldap_update_password = true", "config.ldap_update_password = true"
-gsub_file "config/initializers/devise.rb", "# config.ldap_use_admin_to_bind = false", "config.ldap_use_admin_to_bind = true"
+
+inject_into_file "app/views/devise/registrations/new.html.erb", after: "<%= f.input :email, required: true, autofocus: true %>\n" do
+<<-EOF
+    <%= f.input :username, required: true %>
+EOF
+end
+
+inject_into_file "app/views/devise/registrations/edit.html.erb", after: "<%= f.input :email, required: true, autofocus: true %>\n" do
+<<-EOF
+    <%= f.input :username, required: true %>
+EOF
+end
+
+inject_into_file "config/initializers/devise.rb", after: "# ==> LDAP Configuration~\n" do
+<<-EOF
+  config.ldap_logger = true"
+  config.ldap_create_user = true"
+  config.ldap_update_password = true"
+  config.ldap_use_admin_to_bind = true"
+EOF
+end
+
 gsub_file "config/initializers/devise.rb", "# config.authentication_keys = [ :email ]", "config.authentication_keys = [ :username ]"
 gsub_file "config/initializers/devise.rb", "config.password_length = 8..128", "config.password_length = 4..128"
+inject_into_file "app/controllers/application_controller.rb", after: "protect_from_forgery with: :exception\n" do
+<<-EOF
+  skip_before_action :verify_authenticity_token, if: :skip_authenticity?
+  before_action :authenticate_user!
+  before_action :configure_permitted_parameters, if: :devise_controller?
+
+  protected
+
+  def configure_permitted_parameters
+    devise_parameter_sanitizer.for(:sign_in) << :username
+  end
+
+  def skip_authenticity?
+    request.format.json? or params[:skip_authenticity]
+  end
+EOF
+end
 
 
 # CMS
