@@ -324,12 +324,23 @@ EOF
 end
 
 
-# # Blogs for test
-# generate "scaffold", "blog", "title:string", "content:text", "published_at:datetime", "visits:integer", "public:boolean", "category:string"
-# rake "db:migrate"
-# inject_into_file "spec/controllers/blogs_controller_spec.rb", after: "RSpec.describe BlogsController, :type => :controller do\n" do
-# <<-EOF
-# 
-#   before { sign_in_user }
-# EOF
-# end
+# scaffold resources
+{
+  "blog" => [
+    "title:string",
+    "content:text",
+    "published_at:datetime",
+    "visits:integer",
+    "public:boolean",
+    "category:string",
+  ],
+}.each do |resource, fields|
+  generate "scaffold", resource, *fields
+  rake "db:migrate"
+  inject_into_file "spec/controllers/#{resource.tableize}_controller_spec.rb", after: "RSpec.describe #{resource.pluralize.camelize}Controller, :type => :controller do\n" do
+<<-EOF
+
+  before { sign_in_user }
+EOF
+  end
+end
