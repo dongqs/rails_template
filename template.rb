@@ -39,7 +39,6 @@ run "bundle install"
 
 # .gitignore
 append_file ".gitignore", <<-EOF
-/config/application.yml
 /config/database.yml
 /config/secrets.yml
 /config/ldap.yml
@@ -140,7 +139,7 @@ gsub_file ".rspec", "--warnings\n", ""
 
 
 # guard
-run "guard init rspec"
+run "bundle exec guard init rspec"
 inject_into_file "Guardfile", ", cmd: 'spring rspec'", after: ":rspec"
 
 
@@ -304,6 +303,11 @@ end
 
 # static pages
 generate "controller", "static_pages", "home", "status"
+inject_into_file "app/controllers/static_pages_controller.rb", after: "class StaticPagesController < ApplicationController\n" do
+<<-EOF
+  skip_before_action :authenticate_user!, only: [:home, :status]
+EOF
+end
 inject_into_file "app/controllers/static_pages_controller.rb", after: "def status\n" do
 <<-EOF
     render json: {
@@ -326,13 +330,10 @@ end
 
 # scaffold resources
 {
-  "blog" => [
-    "title:string",
-    "content:text",
-    "published_at:datetime",
-    "visits:integer",
-    "public:boolean",
-    "category:string",
+  "channel" => [
+    "name:string",
+    "password:string",
+    "publishing:boolean",
   ],
 }.each do |resource, fields|
   generate "scaffold", resource, *fields
