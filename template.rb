@@ -271,14 +271,15 @@ inject_into_file "app/views/devise/registrations/edit.html.erb", after: "<%= f.i
 EOF
 end
 
-inject_into_file "config/initializers/devise.rb", after: "# ==> LDAP Configuration~\n" do
+inject_into_file "config/initializers/devise.rb", after: "# ==> LDAP Configuration \n" do
 <<-EOF
-  config.ldap_logger = true"
-  config.ldap_create_user = true"
-  config.ldap_update_password = true"
-  config.ldap_use_admin_to_bind = true"
+  config.ldap_logger = true
+  config.ldap_create_user = true
+  config.ldap_update_password = true
+  config.ldap_use_admin_to_bind = true
 EOF
 end
+
 gsub_file "config/initializers/devise.rb", "# config.authentication_keys = [ :email ]", "config.authentication_keys = [ :username ]"
 gsub_file "config/initializers/devise.rb", "config.password_length = 8..128", "config.password_length = 4..128"
 
@@ -313,7 +314,7 @@ inject_into_file "app/controllers/static_pages_controller.rb", after: "def statu
     render json: {
       status: "ok",
       hostname: Socket.gethostname,
-      service: "mushroom",
+      service: "#{app_path}",
       commit: @@comment ||= `git log -1 --oneline`
     }
 EOF
