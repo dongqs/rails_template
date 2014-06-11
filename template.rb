@@ -115,6 +115,14 @@ development:
 production:
   :concurrency: 2
 EOF
+inject_into_file "config/routes.rb", after: "Rails.application.routes.draw do\n" do
+<<-EOF
+  require 'sidekiq/web'
+  authenticate :user do
+    mount Sidekiq::Web => '/sidekiq'
+  end
+EOF
+end
 run "cp config/sidekiq.yml config/sidekiq.yml.example"
 
 
