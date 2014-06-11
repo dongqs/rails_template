@@ -142,7 +142,7 @@ html
             span.icon-bar
           a.navbar-brand[href="#"]
             | Project name
-        .collapse.navbar-collapse
+        .collapse.navbar-collapse.pull-right
           ul.nav.navbar-nav
             li = link_to 'Home', root_path
             - if user_signed_in?
@@ -334,8 +334,17 @@ inject_into_file "app/controllers/application_controller.rb", after: "protect_fr
   skip_before_action :verify_authenticity_token, if: :skip_authenticity?
   before_action :authenticate_user!
   before_action :configure_permitted_parameters, if: :devise_controller?
+  after_action :log_current_user
 
-  protected
+  def log_current_user
+    logger.info "Current user: \#{current_user.email}" if current_user
+  end
+
+  def redirect_back default_path = :root, options = {}
+    redirect_to :back, options
+  rescue ActionController::RedirectBackError
+    redirect_to default_path, options
+  end
 
   def configure_permitted_parameters
     devise_parameter_sanitizer.for(:sign_up) << :email
@@ -344,6 +353,54 @@ inject_into_file "app/controllers/application_controller.rb", after: "protect_fr
   def skip_authenticity?
     request.format.json? or params[:skip_authenticity]
   end
+EOF
+end
+
+
+# authentication token
+generate "migration", "add_authentication_token_to_users", "authentication_token:string:index"
+rake "db:migrate"
+inject_into_file "app/models/user.rb", after: "class User < ActiveRecord::Base\n" do
+<<-EOF
+  before_save :ensure_authentication_token
+
+  def ensure_authentication_token
+    if authentication_token.blank?
+      self.authentication_token = generate_authentication_token
+    end
+  end
+
+  def generate_authentication_token
+    loop do
+      token = Devise.friendly_token
+      break token unless User.where(authentication_token: token).first
+    end
+  end
+EOF
+end
+inject_into_file "app/controllers/application_controller.rb", after: "class ApplicationController < ActionController::Base\n" do
+<<-EOF
+  before_action :authenticate_user_from_token!
+
+  def authenticate_user_from_token!
+    auth_token = params[:auth_token].presence
+    user       = auth_token && User.find_by_authentication_token(auth_token.to_s)
+
+    if user
+      # Notice we are passing store false, so the user is not
+      # actually stored in the session and a token is needed
+      # for every request. If you want the token to work as a
+      # sign in token, you can simply remove store: false.
+      sign_in user, store: false
+    end
+  end
+EOF
+end
+inject_into_file "app/views/devise/registrations/edit.html.erb", after: "<%= f.input :current_password, hint: \"we need your current password to confirm your changes\", required: true %>\n" do
+<<-EOF
+    <%= f.input :authentication_token, label: "Auth token" do |f| %>
+        <input value="<%= resource.authentication_token %>" disabled="disabled"></input>
+    <% end %>
 EOF
 end
 
