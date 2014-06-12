@@ -1,3 +1,7 @@
+git :init
+git add: '.'
+git commit: "-a -m 'rails new #{app_path}'"
+
 gsub_file "Gemfile", "https://rubygems.org", "https://ruby.taobao.org"
 
 gem "slim-rails"
@@ -54,6 +58,11 @@ dump.rdb
 EOF
 
 
+# robotes.txt
+gsub_file "public/robots.txt", "# User-agent: *", "User-agent: *"
+gsub_file "public/robots.txt", "# Disallow: /", "Disallow: /"
+
+
 # application.rb
 gsub_file "config/application.rb", "# config.time_zone = 'Central Time (US & Canada)'", "config.time_zone = 'Beijing'"
 inject_into_file "config/application.rb", after: "# config.i18n.default_locale = :de\n" do
@@ -66,6 +75,11 @@ inject_into_file "config/application.rb", after: "# config.i18n.default_locale =
     end
 EOS
 end
+
+
+# production.rb
+gsub_file "config/environments/production.rb", "config.serve_static_assets = false", "config.serve_static_assets = true"
+gsub_file "config/environments/production.rb", "config.log_level = :info", "config.log_level = :debug"
 
 
 # database config example
@@ -148,8 +162,8 @@ html
             span.icon-bar
             span.icon-bar
             span.icon-bar
-          a.navbar-brand[href="#"]
-            | Project name
+          a.navbar-brand[href="/"]
+            | #{app_path.titleize}
         .collapse.navbar-collapse.pull-right
           ul.nav.navbar-nav
             li = link_to 'Home', root_path
@@ -442,11 +456,10 @@ end
 
 # scaffold resources
 {
-  "channel" => [
+  "book" => [
     "name:string",
-    "password:string",
-    "publishing:boolean",
-  ],
+    "content:text",
+  ]
 }.each do |resource, fields|
   generate "scaffold", resource, *fields
   rake "db:migrate"
@@ -457,3 +470,6 @@ end
 EOF
   end
 end
+
+git add: '.'
+git commit: "-a -m 'intialized from template'"
