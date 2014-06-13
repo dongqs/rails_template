@@ -497,8 +497,7 @@ inject_into_file "app/controllers/application_controller.rb", after: "protect_fr
 
   def authenticate_role! role, resource = nil
     return unless user_signed_in?
-    raise "role \#{role} must be in Role::USER_ROLES" unless role.in? Role::USER_ROLES
-    unless current_user && current_user.has_role?(role)
+    unless current_user && current_user.has_any_role?(*([role] + Role::OVERRIDE[role].to_a).uniq.compact)
       raise AuthenticationError, "\#{current_user.name} not authenticated as a \#{role} user"
     end
   end
@@ -517,6 +516,10 @@ inject_into_file "app/models/role.rb", after: "scopify\n" do
   BUREAUCRACY = {
     system: [:system, :admin, :normal],
     admin: [:admin, :normal],
+  }
+  OVERRIDE = {
+    normal: [:system, :admin],
+    admin: [:system],
   }
 EOF
 end
@@ -657,7 +660,7 @@ table.table
       td = user.username
       - @roles.each do |role|
         td
-          = form_for user do |f|
+          = form_for user, url: role_user_path(user), method: :put do |f|
               - operation, activation, btn_class = user.has_role?(role) ? \
                 %w(revoke active btn-success) : %w(grant inactive btn-danger)
               = hidden_field_tag :operation, operation
