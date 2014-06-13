@@ -17,6 +17,7 @@ gem "mysql2"
 
 gem "devise"
 gem "devise_ldap_authenticatable"
+gem 'rolify'
 
 gem "sidekiq"
 gem "sinatra"
@@ -432,6 +433,7 @@ generate "controller", "static_pages", "home", "status"
 inject_into_file "app/controllers/static_pages_controller.rb", after: "class StaticPagesController < ApplicationController\n" do
 <<-EOF
   skip_before_action :authenticate_user!, only: [:home, :status]
+  skip_before_action :authenticate_normal!, only: [:home, :status]
 EOF
 end
 inject_into_file "app/controllers/static_pages_controller.rb", after: "def status\n" do
@@ -454,6 +456,223 @@ EOF
 end
 
 
+# rolify
+generate "rolify", "Role", "User"
+run "cd db/migrate && file=`ls | tail -n 1` && mv $file $file.rb" # hack rolify bug
+rake "db:migrate"
+
+inject_into_file "app/models/user.rb", after: "rolify\n" do
+<<-EOF
+  def managing_roles
+    roles = Role::USER_ROLES.select {|role| has_role? role}
+    roles.map! {|role| Role::BUREAUCRACY[role]}
+    roles.flatten!
+    roles.compact!
+    roles.uniq!
+    roles.sort! {|a,b|Role::USER_ROLES.index(a) <=> Role::USER_ROLES.index(b)}
+    roles
+  end
+EOF
+end
+inject_into_file "app/controllers/application_controller.rb", after: "protect_from_forgery with: :exception\n" do
+<<-EOF
+  before_action :authenticate_normal!
+
+  class AuthenticationError < SecurityError; end
+  class AuthorizationError < SecurityError; end
+
+  rescue_from AuthenticationError do |exception|
+    flash[:error] = exception.to_s
+    redirect_to :root
+  end
+
+  rescue_from AuthorizationError do |exception|
+    flash[:error] = exception.to_s
+    redirect_to :root
+  end
+
+  def authenticate_current_user! user
+    raise AuthorizationError unless current_user == user or current_user.system?
+  end
+
+  def authenticate_role! role, resource = nil
+    return unless user_signed_in?
+    raise "role \#{role} must be in Role::USER_ROLES" unless role.in? Role::USER_ROLES
+    unless current_user && current_user.has_role?(role)
+      raise AuthenticationError, "\#{current_user.name} not authenticated as a \#{role} user"
+    end
+  end
+
+  Role::USER_ROLES.each do |role|
+    define_method "authenticate_\#{role.to_s}!" do
+      authenticate_role! role
+    end
+  end
+EOF
+end
+inject_into_file "app/models/role.rb", after: "scopify\n" do
+<<-EOF
+  OPERATIONS = [:grant, :revoke]
+  USER_ROLES = [:system, :admin, :normal]
+  BUREAUCRACY = {
+    system: [:system, :admin, :normal],
+    admin: [:admin, :normal],
+  }
+EOF
+end
+gsub_file "spec/support/devise.rb", "role = :user", "role = :system", force: true
+inject_into_file "config/routes.rb", after: "Rails.application.routes.draw do\n" do
+<<-EOF
+  resources :users, only: [:index] do
+    member do
+      put :role
+    end
+  end
+EOF
+end
+inject_into_file "spec/factories/users.rb", after: "factory :user do\n" do
+<<-EOF
+    factory :normal do
+      after(:create) do |user|
+        user.grant :normal
+      end
+    end
+
+    factory :admin do
+      after(:create) do |user|
+        user.grant :normal
+        user.grant :admin
+      end
+    end
+
+    factory :system do
+      after(:create) do |user|
+        user.grant :normal
+        user.grant :system
+      end
+    end
+EOF
+end
+create_file "app/controllers/users_controller.rb", <<-EOF
+class UsersController < ApplicationController
+
+  def index
+    @users = User.all
+    @roles = current_user.managing_roles
+  end
+
+  def role
+    @user = User.find params[:id]
+    operation, role = params[:operation].to_sym, params[:role].to_sym
+
+    raise "role operation \#{operation} undefined" unless operation.to_sym.in? Role::OPERATIONS
+    raise "user role \#{role} undefined" unless role.to_sym.in? Role::USER_ROLES
+    raise "current user not in charge of \#{role}" unless role.to_sym.in? current_user.managing_roles
+    @user.send operation, role
+    redirect_back :root, notice: "User \#{@user.name} was \#{operation}ed role \#{role}"
+  rescue => exc
+    redirect_back :root, notice: exc.to_s
+  end
+end
+EOF
+create_file "spec/controllers/users_controller_spec.rb", <<-EOF
+require 'rails_helper'
+
+RSpec.describe UsersController, :type => :controller do
+
+  let(:valid_session) { { } }
+
+  describe "GET index" do
+    it "redirect normal users" do
+      @user = sign_in_user :normal
+      get :index, {}, valid_session
+      assigns(:users).should eq [@user]
+      assigns(:roles).should be_empty
+    end
+
+    it "assigns all users as @users" do
+      @user = sign_in_user :admin
+      get :index, {}, valid_session
+      assigns(:users).should eq [@user]
+      assigns(:roles).should eq [:admin, :normal]
+    end
+
+    it "assigns all users as @users" do
+      @user = sign_in_user :system
+      get :index, {}, valid_session
+      assigns(:users).should eq [@user]
+      assigns(:roles).should eq [:system, :admin, :normal]
+    end
+  end
+
+  describe "PUT role" do
+
+    describe "normal users" do
+
+      it "redirect normal users" do
+        sign_in_user :normal
+        user = FactoryGirl.create :normal
+        operation = :grant
+        role = :normal
+        put :role, {:id => user.to_param, :operation => operation, :role => role}, valid_session
+        response.should redirect_to(:root)
+      end
+    end
+
+    describe "system users" do
+
+      describe "global roles" do
+        it "grant role to user" do
+          sign_in_user :system
+          user = FactoryGirl.create :system
+
+          expect(user).to_not be_has_role :admin
+          put :role, {:id => user.to_param, :operation => :grant, :role => :admin}, valid_session
+          expect(user).to be_has_role :admin
+        end
+
+        it "revoke role from user" do
+          sign_in_user :system
+          user = FactoryGirl.create :user
+          user.grant 'normal'
+
+          expect(user).to be_has_role :normal
+          put :role, {:id => user.to_param, :operation => :revoke, :role => :normal}, valid_session
+          expect(user).to_not be_has_role :normal
+        end
+      end
+    end
+  end
+end
+EOF
+create_file "app/views/users/index.html.slim", <<-EOF
+table.table
+  tr
+    th Username
+    - @roles.each do |role|
+      th = role.to_s.titleize
+    end
+  - @users.each do |user|
+    tr
+      td = user.username
+      - @roles.each do |role|
+        td
+          = form_for user do |f|
+              - operation, activation, btn_class = user.has_role?(role) ? \
+                %w(revoke active btn-success) : %w(grant inactive btn-danger)
+              = hidden_field_tag :operation, operation
+              = hidden_field_tag :role, role
+              = f.submit activation, class: "btn \#{btn_class}"
+EOF
+append_file "db/seeds.rb", <<-EOF
+user = User.create! username: "admin", email: "admin@example.com", password: "password", password_confirmation: "password"
+Role::USER_ROLES.each do |role|
+  user.grant role
+end
+EOF
+rake "db:seed"
+
+
 # scaffold resources
 {
   "book" => [
@@ -473,3 +692,6 @@ end
 
 git add: '.'
 git commit: "-a -m 'intialized from template'"
+
+rake "db:test:prepare"
+run "bundle exec rspec"
