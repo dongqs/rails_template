@@ -14,7 +14,6 @@ gem "kaminari"
 gem "rest-client"
 gem "puma"
 gem "mysql2"
-gem 'annotate'
 
 gem "devise"
 gem "devise_ldap_authenticatable"
@@ -44,7 +43,7 @@ end
 
 
 # run "bundle install --local" # for development
-run "bundle install"
+run "bundle install -V"
 
 
 # .gitignore
@@ -89,14 +88,14 @@ run "cp config/database.yml config/database.yml.example"
 
 
 # figaro
-generate "figaro:install"
+run "bundle exec figaro install"
 run "cp config/application.yml config/application.yml.example"
 
 
 # sidekiq
 append_file "config/application.yml", <<-EOF
 REDIS_HOST: localhost
-REDIS_PORT: 6379
+REDIS_PORT: "6379"
 EOF
 run "cp config/application.yml config/application.yml.example"
 create_file "app/workers/hello_worker.rb", <<-EOF
@@ -218,10 +217,18 @@ generate "devise:install"
 generate "devise:views"
 generate "devise", "user"
 rake "db:migrate"
+
 prepend_file "spec/rails_helper.rb", <<-EOF
 require 'simplecov'
 SimpleCov.start
 EOF
+
+inject_into_file "spec/rails_helper.rb", after: "# Dir[Rails.root.join(\"spec/support/**/*.rb\")].each { |f| require f }\n" do
+<<-EOF
+Dir[Rails.root.join("spec/support/**/*.rb")].each { |f| require f } # since rspec 3.1
+EOF
+end
+
 inject_into_file "spec/rails_helper.rb", after: "RSpec.configure do |config|\n" do
 <<-EOF
   config.before(:suite) do
@@ -465,13 +472,10 @@ rake "db:migrate"
 inject_into_file "app/models/user.rb", after: "rolify\n" do
 <<-EOF
   def managing_roles
-    roles = Role::USER_ROLES.select {|role| has_role? role}
-    roles.map! {|role| Role::BUREAUCRACY[role]}
-    roles.flatten!
-    roles.compact!
-    roles.uniq!
-    roles.sort! {|a,b|Role::USER_ROLES.index(a) <=> Role::USER_ROLES.index(b)}
-    roles
+    roles = []
+    roles += [:system, :admin] if has_role? :system
+    roles += [:normal] if has_role? :admin
+    roles.uniq
   end
 EOF
 end
@@ -498,8 +502,15 @@ inject_into_file "app/controllers/application_controller.rb", after: "protect_fr
 
   def authenticate_role! role, resource = nil
     return unless user_signed_in?
-    unless current_user && current_user.has_any_role?(*([role] + Role::OVERRIDE[role].to_a).uniq.compact)
+    unless current_user.has_role? role
       raise AuthenticationError, "\#{current_user.name} not authenticated as a \#{role} user"
+    end
+  end
+
+  def authenticate_any_role! *roles
+    return unless user_signed_in?
+    unless current_user.has_any_role? *roles
+      raise AuthenticationError, "\#{current_user.name} not authenticated as any of \#{roles.join(", ")}"
     end
   end
 
@@ -514,14 +525,6 @@ inject_into_file "app/models/role.rb", after: "scopify\n" do
 <<-EOF
   OPERATIONS = [:grant, :revoke]
   USER_ROLES = [:system, :admin, :normal]
-  BUREAUCRACY = {
-    system: [:system, :admin, :normal],
-    admin: [:admin, :normal],
-  }
-  OVERRIDE = {
-    normal: [:system, :admin],
-    admin: [:system],
-  }
 EOF
 end
 gsub_file "spec/support/devise.rb", "role = :user", "role = :system", force: true
@@ -560,12 +563,16 @@ end
 create_file "app/controllers/users_controller.rb", <<-EOF
 class UsersController < ApplicationController
 
+  skip_before_action :authenticate_admin!, only: [:index, :role]
+
   def index
+    authenticate_any_role! :system, :admin
     @users = User.all
     @roles = current_user.managing_roles
   end
 
   def role
+    authenticate_any_role! :system, :admin
     @user = User.find params[:id]
     operation, role = params[:operation].to_sym, params[:role].to_sym
 
@@ -590,22 +597,21 @@ RSpec.describe UsersController, :type => :controller do
     it "redirect normal users" do
       @user = sign_in_user :normal
       get :index, {}, valid_session
-      assigns(:users).should eq [@user]
-      assigns(:roles).should be_empty
+      expect(response).to redirect_to :root
     end
 
     it "assigns all users as @users" do
       @user = sign_in_user :admin
       get :index, {}, valid_session
-      assigns(:users).should eq [@user]
-      assigns(:roles).should eq [:admin, :normal]
+      expect(assigns(:users)).to eq [@user]
+      expect(assigns(:roles)).to eq [:normal]
     end
 
     it "assigns all users as @users" do
       @user = sign_in_user :system
       get :index, {}, valid_session
-      assigns(:users).should eq [@user]
-      assigns(:roles).should eq [:system, :admin, :normal]
+      expect(assigns(:users)).to eq [@user]
+      expect(assigns(:roles)).to eq [:system, :admin]
     end
   end
 
@@ -619,7 +625,7 @@ RSpec.describe UsersController, :type => :controller do
         operation = :grant
         role = :normal
         put :role, {:id => user.to_param, :operation => operation, :role => role}, valid_session
-        response.should redirect_to(:root)
+        expect(response).to redirect_to(:root)
       end
     end
 
@@ -632,17 +638,17 @@ RSpec.describe UsersController, :type => :controller do
 
           expect(user).to_not be_has_role :admin
           put :role, {:id => user.to_param, :operation => :grant, :role => :admin}, valid_session
-          expect(user).to be_has_role :admin
+          expect(assigns(:user)).to be_has_role :admin
         end
 
         it "revoke role from user" do
           sign_in_user :system
           user = FactoryGirl.create :user
-          user.grant 'normal'
+          user.grant 'admin'
 
-          expect(user).to be_has_role :normal
-          put :role, {:id => user.to_param, :operation => :revoke, :role => :normal}, valid_session
-          expect(user).to_not be_has_role :normal
+          expect(user).to be_has_role :admin
+          put :role, {:id => user.to_param, :operation => :revoke, :role => :admin}, valid_session
+          expect(assigns(:user)).to_not be_has_role :admin
         end
       end
     end
@@ -694,10 +700,7 @@ EOF
   end
 end
 
-run "bundle exec annotate"
-
 git add: '.'
 git commit: "-a -m 'intialized from template'"
 
-rake "db:test:prepare"
 run "bundle exec rspec"
