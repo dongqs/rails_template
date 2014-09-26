@@ -14,6 +14,7 @@ gem "kaminari"
 gem "rest-client"
 gem "puma"
 gem "mysql2"
+gem 'annotate'
 
 gem "devise"
 gem "devise_ldap_authenticatable"
@@ -692,6 +693,8 @@ rake "db:seed"
 EOF
   end
 end
+
+run "bundle exec annotate"
 
 git add: '.'
 git commit: "-a -m 'intialized from template'"
