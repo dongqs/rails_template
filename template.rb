@@ -175,7 +175,12 @@ html
     .container
       #flash
         - flash.each do |key, value|
-          = content_tag(:div, value, class: "alert alert-\#{key}")
+          div.alert.alert-dismissible role="alert" class="alert-#{key}"
+            button.close type="button" data-dismiss="alert"
+              span aria-hidden="true"
+                | &times;
+              span.sr-only Close
+            = value
       == yield
 EOF
 
